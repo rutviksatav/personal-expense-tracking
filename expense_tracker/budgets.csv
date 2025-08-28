@@ -1,0 +1,27 @@
+Category,Subcategory,Amount
+Salary,,100000
+Mandatory,Home Rent,13000
+Mandatory,Home Electricity,0
+Mandatory,Mutual Funds,12000
+Mandatory,Family Support,10000
+Mandatory,Phone EMI,5000
+Flexible,Food:Groceries,5000
+Flexible,Food:Lunch,1000
+Flexible,Food:Dinner,1000
+Flexible,Food:Weekend/Restaurant,1000
+Flexible,Food:Coffee,500
+Flexible,Shopping:Clothes,2000
+Flexible,Shopping:Perfume,0
+Flexible,Shopping:Skincare,0
+Flexible,Shopping:Accessories/Others,0
+Flexible,Bills & Utilities:Water,1000
+Flexible,Bills & Utilities:Internet/Wifi,1000
+Flexible,Entertainment:Movies,500
+Flexible,Entertainment:Netflix,200
+Flexible,Entertainment:Spotify,160
+Flexible,Entertainment:Hotstar,100
+Flexible,Travel:Office Cab,2000
+Flexible,Travel:Weekend Cabs,1000
+Flexible,Other:Miscellaneous,500
+Flexible Budget,,16960
+Savings,,43040

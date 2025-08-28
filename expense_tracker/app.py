@@ -3,35 +3,44 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 from datetime import datetime, date
-import json
 
 # Constants
-EXPENSES_FILE = "expenses.json"
-BUDGETS_FILE = "budgets.json"
+EXPENSES_FILE = "expenses.csv"  # Changed to CSV
+BUDGETS_FILE = "budgets.csv"
 
-def load_json(file_path):
-    """Load JSON data from file."""
+def load_budgets_csv(file_path):
+    """Load budgets from CSV file."""
     try:
-        with open(file_path, "r") as f:
-            return json.load(f)
+        df = pd.read_csv(file_path)
+        if set(df.columns) != {'Category', 'Subcategory', 'Amount'}:
+            raise ValueError("CSV must have 'Category', 'Subcategory', and 'Amount' columns")
+        return df
     except FileNotFoundError:
-        return {} if 'budgets' in file_path else []
+        return pd.DataFrame(columns=['Category', 'Subcategory', 'Amount'])
 
-def save_json(data, file_path):
-    """Save JSON data to file."""
-    with open(file_path, "w") as f:
-        json.dump(data, f, indent=4)
+def load_expenses_csv(file_path):
+    """Load expenses from CSV file."""
+    try:
+        df = pd.read_csv(file_path)
+        if set(df.columns) != {'Date', 'Category', 'Amount', 'Month', 'Year'}:
+            raise ValueError("CSV must have 'Date', 'Category', 'Amount', 'Month', 'Year' columns")
+        return df
+    except FileNotFoundError:
+        return pd.DataFrame(columns=['Date', 'Category', 'Amount', 'Month', 'Year'])
+
+def save_expenses_csv(df, file_path):
+    """Save expenses to CSV file."""
+    df.to_csv(file_path, index=False)
 
 class ExpenseTracker:
     def __init__(self):
-        self.expenses = load_json(EXPENSES_FILE)
-        self.budgets = load_json(BUDGETS_FILE)
+        self.budgets_df = load_budgets_csv(BUDGETS_FILE)
+        self.expenses_df = load_expenses_csv(EXPENSES_FILE)
 
-        # Flatten flexible categories for dropdown
+        # Extract flexible categories for dropdown
         self.flexible_categories = []
-        for cat, subcats in self.budgets.get("Flexible", {}).items():
-            for subcat in subcats:
-                self.flexible_categories.append(subcat)
+        flexible_rows = self.budgets_df[self.budgets_df['Category'] == 'Flexible']
+        self.flexible_categories = flexible_rows['Subcategory'].dropna().tolist()
 
         # Calculate flexible budget and savings
         self.calculate_flexible_budget()
@@ -47,36 +56,63 @@ class ExpenseTracker:
             "Month": date_val.strftime("%Y-%m"),
             "Year": date_val.year
         }
-        self.expenses.append(entry)
-        save_json(self.expenses, EXPENSES_FILE)
+        # Append new expense to DataFrame
+        new_entry_df = pd.DataFrame([entry])
+        self.expenses_df = pd.concat([self.expenses_df, new_entry_df], ignore_index=True)
+        save_expenses_csv(self.expenses_df, EXPENSES_FILE)
 
     def get_expenses_df(self):
-        if not self.expenses:
-            return pd.DataFrame()
-        df = pd.DataFrame(self.expenses)
+        if self.expenses_df.empty:
+            return pd.DataFrame(columns=['Date', 'Category', 'Amount', 'Month', 'Year'])
+        df = self.expenses_df.copy()
         df['Date'] = pd.to_datetime(df['Date'])
         df['Amount'] = pd.to_numeric(df['Amount'], errors='coerce')
+        df['Year'] = pd.to_numeric(df['Year'], errors='coerce')
         return df.dropna(subset=['Amount', 'Date'])
 
     def get_budgets(self):
-        return self.budgets
+        # Convert budgets DataFrame to a dictionary for compatibility
+        budgets = {
+            "Salary": self.budgets_df[self.budgets_df['Category'] == 'Salary']['Amount'].iloc[0] if not self.budgets_df[self.budgets_df['Category'] == 'Salary'].empty else 0,
+            "Mandatory": {
+                row['Subcategory']: row['Amount']
+                for _, row in self.budgets_df[self.budgets_df['Category'] == 'Mandatory'].iterrows()
+                if pd.notna(row['Subcategory'])
+            },
+            "Flexible": {}
+        }
+        # Organize flexible subcategories
+        flexible_rows = self.budgets_df[self.budgets_df['Category'] == 'Flexible']
+        for _, row in flexible_rows.iterrows():
+            if pd.notna(row['Subcategory']):
+                main_cat, sub_cat = row['Subcategory'].split(':') if ':' in row['Subcategory'] else ('Other', row['Subcategory'])
+                if main_cat not in budgets['Flexible']:
+                    budgets['Flexible'][main_cat] = {}
+                budgets['Flexible'][main_cat][sub_cat] = row['Amount']
+        budgets["Flexible Budget"] = self.budgets_df[self.budgets_df['Category'] == 'Flexible Budget']['Amount'].iloc[0] if not self.budgets_df[self.budgets_df['Category'] == 'Flexible Budget'].empty else 0
+        budgets["Savings"] = self.budgets_df[self.budgets_df['Category'] == 'Savings']['Amount'].iloc[0] if not self.budgets_df[self.budgets_df['Category'] == 'Savings'].empty else 0
+        return budgets
 
     def calculate_flexible_budget(self):
-        mandatory_total = sum(self.budgets.get("Mandatory", {}).values())
-        flexible_total = sum(
-            sum(subcat.values()) for subcat in self.budgets.get("Flexible", {}).values()
+        mandatory_total = sum(
+            row['Amount'] for _, row in self.budgets_df[self.budgets_df['Category'] == 'Mandatory'].iterrows()
+            if pd.notna(row['Subcategory'])
         )
-        self.budgets["Flexible Budget"] = flexible_total
-        self.budgets["Savings"] = self.budgets.get("Salary", 0) - (mandatory_total + flexible_total)
-
+        flexible_total = sum(
+            row['Amount'] for _, row in self.budgets_df[self.budgets_df['Category'] == 'Flexible'].iterrows()
+            if pd.notna(row['Subcategory'])
+        )
+        salary = self.budgets_df[self.budgets_df['Category'] == 'Salary']['Amount'].iloc[0] if not self.budgets_df[self.budgets_df['Category'] == 'Salary'].empty else 0
+        self.budgets_df.loc[self.budgets_df['Category'] == 'Flexible Budget', 'Amount'] = flexible_total
+        self.budgets_df.loc[self.budgets_df['Category'] == 'Savings', 'Amount'] = salary - (mandatory_total + flexible_total)
+        # Save updated budgets to CSV
+        self.budgets_df.to_csv(BUDGETS_FILE, index=False)
 
 def calculate_statistics(df: pd.DataFrame, tracker) -> dict:
     """Calculates statistics from the expenses data."""
-    budgets = tracker.budgets
+    budgets = tracker.get_budgets()
     mandatory_total = sum(budgets.get("Mandatory", {}).values())
-    flexible_budget = sum(
-        sum(cat.values()) for cat in budgets.get("Flexible", {}).values()
-    )
+    flexible_budget = budgets.get("Flexible Budget", 0)
 
     if df.empty:
         return {
@@ -84,7 +120,7 @@ def calculate_statistics(df: pd.DataFrame, tracker) -> dict:
             'monthly_total': 0,
             'flexible_spent': 0,
             'flexible_remaining': flexible_budget,
-            'savings': budgets.get("Salary", 0) - mandatory_total - flexible_budget,
+            'savings': budgets.get("Savings", 0),
             'monthly_by_category': {},
             'top_expenses': []
         }
@@ -102,11 +138,9 @@ def calculate_statistics(df: pd.DataFrame, tracker) -> dict:
     )
 
     # Calculate spent in flexible categories only
-    flexible_categories = tracker.categories  # already only flexible + mandatory
     flexible_spent = sum(
         monthly_by_category.get(cat, 0)
-        for cat in flexible_categories
-        if cat not in budgets.get("Mandatory", {})
+        for cat in tracker.flexible_categories
     )
     flexible_remaining = flexible_budget - flexible_spent
 
@@ -201,7 +235,7 @@ def main():
 
             st.subheader("Top 5 Expenses This Month")
             top_df = pd.DataFrame(stats['top_expenses'])
-            st.dataframe(top_df[['Date','Category','Amount']])
+            st.dataframe(top_df[['Date', 'Category', 'Amount']])
 
             st.subheader("Monthly Trend (Last 6 Months)")
             df_expenses['Month_Year'] = df_expenses['Date'].dt.to_period('M')
