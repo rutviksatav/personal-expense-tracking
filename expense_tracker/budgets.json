@@ -1,0 +1,43 @@
+{
+    "Salary": 100000,
+    "Mandatory": {
+        "Home Rent": 13000,
+        "Home Electricity": 0,
+        "Mutual Funds": 12000,
+        "Family Support": 10000,
+        "Phone EMI": 5000
+    },
+    "Flexible": {
+        "Food": {
+            "Groceries": 5000,
+            "Lunch": 1000,
+            "Dinner": 1000,
+            "Weekend/Restaurant": 1000,
+            "Coffee": 500
+        },
+        "Shopping": {
+            "Clothes": 2000,
+            "Perfume": 0,
+            "Skincare": 0,
+            "Accessories/Others": 0
+        },
+        "Bills & Utilities": {
+            "Water": 1000,
+            "Internet/Wifi": 1000
+        },
+        "Entertainment": {
+            "Movies": 500,
+            "Netflix": 200,
+            "Spotify": 160,
+            "Hotstar": 100
+        },
+        "Travel": {
+            "Office Cab": 2000,
+            "Weekend Cabs": 1000
+        },
+        "Other": {
+            "Miscellaneous": 500
+        }
+    },
+    "Savings": 0
+}
