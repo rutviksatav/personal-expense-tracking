@@ -3,113 +3,182 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 from datetime import datetime, date
+import psycopg2
+from psycopg2 import sql
+import os
 
-# Constants
-EXPENSES_FILE = "expenses.csv"  # Changed to CSV
-BUDGETS_FILE = "budgets.csv"
+# Database connection
+def get_db_connection():
+    """Connect to Heroku Postgres database."""
+    DATABASE_URL = os.getenv('DATABASE_URL')
+    conn = psycopg2.connect(DATABASE_URL, sslmode='require')
+    return conn
 
-def load_budgets_csv(file_path):
-    """Load budgets from CSV file."""
-    try:
-        df = pd.read_csv(file_path)
-        if set(df.columns) != {'Category', 'Subcategory', 'Amount'}:
-            raise ValueError("CSV must have 'Category', 'Subcategory', and 'Amount' columns")
-        return df
-    except FileNotFoundError:
-        return pd.DataFrame(columns=['Category', 'Subcategory', 'Amount'])
-
-def load_expenses_csv(file_path):
-    """Load expenses from CSV file."""
-    try:
-        df = pd.read_csv(file_path)
-        if set(df.columns) != {'Date', 'Category', 'Amount', 'Month', 'Year'}:
-            raise ValueError("CSV must have 'Date', 'Category', 'Amount', 'Month', 'Year' columns")
-        return df
-    except FileNotFoundError:
-        return pd.DataFrame(columns=['Date', 'Category', 'Amount', 'Month', 'Year'])
-
-def save_expenses_csv(df, file_path):
-    """Save expenses to CSV file."""
-    df.to_csv(file_path, index=False)
+def init_db():
+    """Initialize database tables."""
+    conn = get_db_connection()
+    c = conn.cursor()
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS budgets (
+            id SERIAL PRIMARY KEY,
+            category TEXT,
+            subcategory TEXT,
+            amount FLOAT
+        )
+    ''')
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS expenses (
+            id SERIAL PRIMARY KEY,
+            date TEXT,
+            category TEXT,
+            amount FLOAT,
+            month TEXT,
+            year INTEGER
+        )
+    ''')
+    conn.commit()
+    # Insert initial budget data if table is empty
+    c.execute("SELECT COUNT(*) FROM budgets")
+    if c.fetchone()[0] == 0:
+        initial_budgets = [
+            ('Salary', None, 100000),
+            ('Mandatory', 'Home Rent', 13000),
+            ('Mandatory', 'Home Electricity', 0),
+            ('Mandatory', 'Mutual Funds', 12000),
+            ('Mandatory', 'Family Support', 10000),
+            ('Mandatory', 'Phone EMI', 5000),
+            ('Flexible', 'Food:Groceries', 5000),
+            ('Flexible', 'Food:Lunch', 1000),
+            ('Flexible', 'Food:Dinner', 1000),
+            ('Flexible', 'Food:Weekend/Restaurant', 1000),
+            ('Flexible', 'Food:Coffee', 500),
+            ('Flexible', 'Shopping:Clothes', 2000),
+            ('Flexible', 'Shopping:Perfume', 0),
+            ('Flexible', 'Shopping:Skincare', 0),
+            ('Flexible', 'Shopping:Accessories/Others', 0),
+            ('Flexible', 'Bills & Utilities:Water', 1000),
+            ('Flexible', 'Bills & Utilities:Internet/Wifi', 1000),
+            ('Flexible', 'Entertainment:Movies', 500),
+            ('Flexible', 'Entertainment:Netflix', 200),
+            ('Flexible', 'Entertainment:Spotify', 160),
+            ('Flexible', 'Entertainment:Hotstar', 100),
+            ('Flexible', 'Travel:Office Cab', 2000),
+            ('Flexible', 'Travel:Weekend Cabs', 1000),
+            ('Flexible', 'Other:Miscellaneous', 500),
+            ('Flexible Budget', None, 18260),
+            ('Savings', None, 53740)
+        ]
+        c.executemany("INSERT INTO budgets (category, subcategory, amount) VALUES (%s, %s, %s)", initial_budgets)
+        conn.commit()
+    conn.close()
 
 class ExpenseTracker:
     def __init__(self):
-        self.budgets_df = load_budgets_csv(BUDGETS_FILE)
-        self.expenses_df = load_expenses_csv(EXPENSES_FILE)
+        init_db()
+        self.budgets_df = self.load_budgets()
+        self.expenses_df = self.load_expenses()
 
         # Extract flexible categories for dropdown
         self.flexible_categories = []
-        flexible_rows = self.budgets_df[self.budgets_df['Category'] == 'Flexible']
-        self.flexible_categories = flexible_rows['Subcategory'].dropna().tolist()
+        flexible_rows = self.budgets_df[self.budgets_df['category'] == 'Flexible']
+        self.flexible_categories = flexible_rows['subcategory'].dropna().tolist()
 
         # Calculate flexible budget and savings
         self.calculate_flexible_budget()
+
+    def load_budgets(self):
+        """Load budgets from database."""
+        conn = get_db_connection()
+        df = pd.read_sql_query("SELECT category, subcategory, amount FROM budgets", conn)
+        conn.close()
+        return df
+
+    def load_expenses(self):
+        """Load expenses from database."""
+        conn = get_db_connection()
+        df = pd.read_sql_query("SELECT date, category, amount, month, year FROM expenses", conn)
+        conn.close()
+        return df if not df.empty else pd.DataFrame(columns=['date', 'category', 'amount', 'month', 'year'])
+
+    def save_expenses(self):
+        """Save expenses to database."""
+        conn = get_db_connection()
+        c = conn.cursor()
+        c.execute("DELETE FROM expenses")  # Clear existing data
+        for _, row in self.expenses_df.iterrows():
+            c.execute(
+                "INSERT INTO expenses (date, category, amount, month, year) VALUES (%s, %s, %s, %s, %s)",
+                (row['date'], row['category'], row['amount'], row['month'], row['year'])
+            )
+        conn.commit()
+        conn.close()
 
     def add_expense(self, date_val: date, category: str, amount: float):
         if amount <= 0:
             raise ValueError("Amount must be positive.")
 
         entry = {
-            "Date": date_val.strftime("%Y-%m-%d"),
-            "Category": category,
-            "Amount": amount,
-            "Month": date_val.strftime("%Y-%m"),
-            "Year": date_val.year
+            "date": date_val.strftime("%Y-%m-%d"),
+            "category": category,
+            "amount": amount,
+            "month": date_val.strftime("%Y-%m"),
+            "year": date_val.year
         }
-        # Append new expense to DataFrame
         new_entry_df = pd.DataFrame([entry])
         self.expenses_df = pd.concat([self.expenses_df, new_entry_df], ignore_index=True)
-        save_expenses_csv(self.expenses_df, EXPENSES_FILE)
+        self.save_expenses()
 
     def get_expenses_df(self):
         if self.expenses_df.empty:
-            return pd.DataFrame(columns=['Date', 'Category', 'Amount', 'Month', 'Year'])
+            return pd.DataFrame(columns=['date', 'category', 'amount', 'month', 'year'])
         df = self.expenses_df.copy()
-        df['Date'] = pd.to_datetime(df['Date'])
-        df['Amount'] = pd.to_numeric(df['Amount'], errors='coerce')
-        df['Year'] = pd.to_numeric(df['Year'], errors='coerce')
-        return df.dropna(subset=['Amount', 'Date'])
+        df['date'] = pd.to_datetime(df['date'])
+        df['amount'] = pd.to_numeric(df['amount'], errors='coerce')
+        df['year'] = pd.to_numeric(df['year'], errors='coerce')
+        return df.dropna(subset=['amount', 'date'])
 
     def get_budgets(self):
-        # Convert budgets DataFrame to a dictionary for compatibility
         budgets = {
-            "Salary": self.budgets_df[self.budgets_df['Category'] == 'Salary']['Amount'].iloc[0] if not self.budgets_df[self.budgets_df['Category'] == 'Salary'].empty else 0,
+            "Salary": self.budgets_df[self.budgets_df['category'] == 'Salary']['amount'].iloc[0] if not self.budgets_df[self.budgets_df['category'] == 'Salary'].empty else 0,
             "Mandatory": {
-                row['Subcategory']: row['Amount']
-                for _, row in self.budgets_df[self.budgets_df['Category'] == 'Mandatory'].iterrows()
-                if pd.notna(row['Subcategory'])
+                row['subcategory']: row['amount']
+                for _, row in self.budgets_df[self.budgets_df['category'] == 'Mandatory'].iterrows()
+                if pd.notna(row['subcategory'])
             },
             "Flexible": {}
         }
-        # Organize flexible subcategories
-        flexible_rows = self.budgets_df[self.budgets_df['Category'] == 'Flexible']
+        flexible_rows = self.budgets_df[self.budgets_df['category'] == 'Flexible']
         for _, row in flexible_rows.iterrows():
-            if pd.notna(row['Subcategory']):
-                main_cat, sub_cat = row['Subcategory'].split(':') if ':' in row['Subcategory'] else ('Other', row['Subcategory'])
+            if pd.notna(row['subcategory']):
+                main_cat, sub_cat = row['subcategory'].split(':') if ':' in row['subcategory'] else ('Other', row['subcategory'])
                 if main_cat not in budgets['Flexible']:
                     budgets['Flexible'][main_cat] = {}
-                budgets['Flexible'][main_cat][sub_cat] = row['Amount']
-        budgets["Flexible Budget"] = self.budgets_df[self.budgets_df['Category'] == 'Flexible Budget']['Amount'].iloc[0] if not self.budgets_df[self.budgets_df['Category'] == 'Flexible Budget'].empty else 0
-        budgets["Savings"] = self.budgets_df[self.budgets_df['Category'] == 'Savings']['Amount'].iloc[0] if not self.budgets_df[self.budgets_df['Category'] == 'Savings'].empty else 0
+                budgets['Flexible'][main_cat][sub_cat] = row['amount']
+        budgets["Flexible Budget"] = self.budgets_df[self.budgets_df['category'] == 'Flexible Budget']['amount'].iloc[0] if not self.budgets_df[self.budgets_df['category'] == 'Flexible Budget'].empty else 0
+        budgets["Savings"] = self.budgets_df[self.budgets_df['category'] == 'Savings']['amount'].iloc[0] if not self.budgets_df[self.budgets_df['category'] == 'Savings'].empty else 0
         return budgets
 
     def calculate_flexible_budget(self):
         mandatory_total = sum(
-            row['Amount'] for _, row in self.budgets_df[self.budgets_df['Category'] == 'Mandatory'].iterrows()
-            if pd.notna(row['Subcategory'])
+            row['amount'] for _, row in self.budgets_df[self.budgets_df['category'] == 'Mandatory'].iterrows()
+            if pd.notna(row['subcategory'])
         )
         flexible_total = sum(
-            row['Amount'] for _, row in self.budgets_df[self.budgets_df['Category'] == 'Flexible'].iterrows()
-            if pd.notna(row['Subcategory'])
+            row['amount'] for _, row in self.budgets_df[self.budgets_df['category'] == 'Flexible'].iterrows()
+            if pd.notna(row['subcategory'])
         )
-        salary = self.budgets_df[self.budgets_df['Category'] == 'Salary']['Amount'].iloc[0] if not self.budgets_df[self.budgets_df['Category'] == 'Salary'].empty else 0
-        self.budgets_df.loc[self.budgets_df['Category'] == 'Flexible Budget', 'Amount'] = flexible_total
-        self.budgets_df.loc[self.budgets_df['Category'] == 'Savings', 'Amount'] = salary - (mandatory_total + flexible_total)
-        # Save updated budgets to CSV
-        self.budgets_df.to_csv(BUDGETS_FILE, index=False)
+        salary = self.budgets_df[self.budgets_df['category'] == 'Salary']['amount'].iloc[0] if not self.budgets_df[self.budgets_df['category'] == 'Salary'].empty else 0
+        self.budgets_df.loc[self.budgets_df['category'] == 'Flexible Budget', 'amount'] = flexible_total
+        self.budgets_df.loc[self.budgets_df['category'] == 'Savings', 'amount'] = salary - (mandatory_total + flexible_total)
+        # Save updated budgets to database
+        conn = get_db_connection()
+        c = conn.cursor()
+        c.execute("UPDATE budgets SET amount = %s WHERE category = %s", (flexible_total, 'Flexible Budget'))
+        c.execute("UPDATE budgets SET amount = %s WHERE category = %s", (salary - (mandatory_total + flexible_total), 'Savings'))
+        conn.commit()
+        conn.close()
 
 def calculate_statistics(df: pd.DataFrame, tracker) -> dict:
-    """Calculates statistics from the expenses data."""
     budgets = tracker.get_budgets()
     mandatory_total = sum(budgets.get("Mandatory", {}).values())
     flexible_budget = budgets.get("Flexible Budget", 0)
@@ -127,26 +196,21 @@ def calculate_statistics(df: pd.DataFrame, tracker) -> dict:
 
     current_month = datetime.now().strftime("%Y-%m")
     today = date.today()
-    current_month_df = df[df['Month'] == current_month]
-    today_df = df[df['Date'].dt.date == today]
+    current_month_df = df[df['month'] == current_month]
+    today_df = df[df['date'].dt.date == today]
 
-    today_total = today_df['Amount'].sum() if not today_df.empty else 0
-
+    today_total = today_df['amount'].sum() if not today_df.empty else 0
     monthly_by_category = (
-        current_month_df.groupby('Category')['Amount'].sum().to_dict()
+        current_month_df.groupby('category')['amount'].sum().to_dict()
         if not current_month_df.empty else {}
     )
-
-    # Calculate spent in flexible categories only
     flexible_spent = sum(
         monthly_by_category.get(cat, 0)
         for cat in tracker.flexible_categories
     )
     flexible_remaining = flexible_budget - flexible_spent
-
-    monthly_total = current_month_df['Amount'].sum() if not current_month_df.empty else 0
-    top_expenses = current_month_df.sort_values('Amount', ascending=False).head(5).to_dict('records')
-
+    monthly_total = current_month_df['amount'].sum() if not current_month_df.empty else 0
+    top_expenses = current_month_df.sort_values('amount', ascending=False).head(5).to_dict('records')
     savings = budgets.get("Salary", 0) - mandatory_total - flexible_spent
 
     return {
@@ -163,7 +227,6 @@ def main():
     st.set_page_config(page_title="Expense Tracker", layout="wide")
     st.title("💰 Personal Expense Tracker")
 
-    # Initialize tracker
     if 'tracker' not in st.session_state:
         st.session_state.tracker = ExpenseTracker()
 
@@ -172,7 +235,6 @@ def main():
     budgets = tracker.get_budgets()
     stats = calculate_statistics(df_expenses, tracker)
 
-    # Sidebar: Add Expense
     with st.sidebar:
         st.header("💸 Add Expense")
         with st.form("add_expense_form"):
@@ -188,10 +250,8 @@ def main():
                 df_expenses = tracker.get_expenses_df()
                 stats = calculate_statistics(df_expenses, tracker)
 
-    # Tabs
     tab1, tab2, tab3 = st.tabs(["📊 Dashboard", "📝 Expenses", "📈 Analytics"])
 
-    # Dashboard
     with tab1:
         st.header("📊 Dashboard")
         col1, col2, col3, col4 = st.columns(4)
@@ -200,7 +260,6 @@ def main():
         with col3: st.metric("Flexible Budget Remaining", f"₹{stats['flexible_remaining']:,.0f}")
         with col4: st.metric("Savings", f"₹{stats['savings']:,.0f}")
 
-        # Spending by category
         if stats['monthly_by_category']:
             st.subheader("💰 Spending by Category")
             budget_data = []
@@ -213,15 +272,13 @@ def main():
             fig.update_layout(title='Spent by Category', xaxis_tickangle=-45)
             st.plotly_chart(fig, use_container_width=True)
 
-    # Expenses Tab
     with tab2:
         st.header("📝 Expense History")
         if not df_expenses.empty:
-            st.dataframe(df_expenses.sort_values('Date', ascending=False).reset_index(drop=True))
+            st.dataframe(df_expenses.sort_values('date', ascending=False).reset_index(drop=True))
         else:
             st.info("No expenses recorded yet. Add some from the sidebar!")
 
-    # Analytics Tab
     with tab3:
         st.header("📈 Analytics & Insights")
         if not df_expenses.empty:
@@ -235,13 +292,13 @@ def main():
 
             st.subheader("Top 5 Expenses This Month")
             top_df = pd.DataFrame(stats['top_expenses'])
-            st.dataframe(top_df[['Date', 'Category', 'Amount']])
+            st.dataframe(top_df[['date', 'category', 'amount']])
 
             st.subheader("Monthly Trend (Last 6 Months)")
-            df_expenses['Month_Year'] = df_expenses['Date'].dt.to_period('M')
-            trend_df = df_expenses.groupby('Month_Year')['Amount'].sum().reset_index()
-            trend_df['Month_Year'] = trend_df['Month_Year'].astype(str)
-            fig2 = px.line(trend_df, x='Month_Year', y='Amount', markers=True, title="Monthly Expense Trend")
+            df_expenses['month_year'] = df_expenses['date'].dt.to_period('M')
+            trend_df = df_expenses.groupby('month_year')['amount'].sum().reset_index()
+            trend_df['month_year'] = trend_df['month_year'].astype(str)
+            fig2 = px.line(trend_df, x='month_year', y='amount', markers=True, title="Monthly Expense Trend")
             st.plotly_chart(fig2, use_container_width=True)
 
 if __name__ == "__main__":
